@@ -3,6 +3,31 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  const adminToggle = document.getElementById("admin-toggle");
+  const adminStatus = document.getElementById("admin-status");
+  const loginForm = document.getElementById("login-form");
+
+  let adminCredentials = sessionStorage.getItem("teacherCredentials");
+
+  function authHeaders() {
+    return adminCredentials
+      ? { Authorization: `Basic ${adminCredentials}` }
+      : {};
+  }
+
+  function updateAdminControls() {
+    const isLoggedIn = Boolean(adminCredentials);
+    adminStatus.classList.toggle("hidden", !isLoggedIn);
+    adminToggle.textContent = isLoggedIn ? "Log out" : "Teacher login";
+    loginForm.classList.toggle("hidden", isLoggedIn || loginForm.dataset.open !== "true");
+  }
+
+  function showMessage(text, type) {
+    messageDiv.textContent = text;
+    messageDiv.className = type;
+    messageDiv.classList.remove("hidden");
+    setTimeout(() => messageDiv.classList.add("hidden"), 5000);
+  }
 
   // Function to fetch activities from API
   async function fetchActivities() {
@@ -30,7 +55,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 ${details.participants
                   .map(
                     (email) =>
-                      `<li><span class="participant-email">${email}</span><button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button></li>`
+                      `<li><span class="participant-email">${email}</span>${
+                        adminCredentials
+                          ? `<button class="delete-btn" data-activity="${name}" data-email="${email}">Remove</button>`
+                          : ""
+                      }</li>`
                   )
                   .join("")}
               </ul>
@@ -80,32 +109,20 @@ document.addEventListener("DOMContentLoaded", () => {
         )}/unregister?email=${encodeURIComponent(email)}`,
         {
           method: "DELETE",
+          headers: authHeaders(),
         }
       );
 
       const result = await response.json();
 
       if (response.ok) {
-        messageDiv.textContent = result.message;
-        messageDiv.className = "success";
-
-        // Refresh activities list to show updated participants
+        showMessage(result.message, "success");
         fetchActivities();
       } else {
-        messageDiv.textContent = result.detail || "An error occurred";
-        messageDiv.className = "error";
+        showMessage(result.detail || "An error occurred", "error");
       }
-
-      messageDiv.classList.remove("hidden");
-
-      // Hide message after 5 seconds
-      setTimeout(() => {
-        messageDiv.classList.add("hidden");
-      }, 5000);
     } catch (error) {
-      messageDiv.textContent = "Failed to unregister. Please try again.";
-      messageDiv.className = "error";
-      messageDiv.classList.remove("hidden");
+      showMessage("Failed to unregister. Please try again.", "error");
       console.error("Error unregistering:", error);
     }
   }
@@ -117,6 +134,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const email = document.getElementById("email").value;
     const activity = document.getElementById("activity").value;
 
+    if (!adminCredentials) {
+      showMessage("Teacher login is required to manage registrations.", "error");
+      return;
+    }
+
     try {
       const response = await fetch(
         `/activities/${encodeURIComponent(
@@ -124,37 +146,84 @@ document.addEventListener("DOMContentLoaded", () => {
         )}/signup?email=${encodeURIComponent(email)}`,
         {
           method: "POST",
+          headers: authHeaders(),
         }
       );
 
       const result = await response.json();
 
       if (response.ok) {
-        messageDiv.textContent = result.message;
-        messageDiv.className = "success";
+        showMessage(result.message, "success");
         signupForm.reset();
-
-        // Refresh activities list to show updated participants
         fetchActivities();
       } else {
-        messageDiv.textContent = result.detail || "An error occurred";
-        messageDiv.className = "error";
+        showMessage(result.detail || "An error occurred", "error");
       }
-
-      messageDiv.classList.remove("hidden");
-
-      // Hide message after 5 seconds
-      setTimeout(() => {
-        messageDiv.classList.add("hidden");
-      }, 5000);
     } catch (error) {
-      messageDiv.textContent = "Failed to sign up. Please try again.";
-      messageDiv.className = "error";
-      messageDiv.classList.remove("hidden");
+      showMessage("Failed to sign up. Please try again.", "error");
       console.error("Error signing up:", error);
     }
   });
 
+  adminToggle.addEventListener("click", () => {
+    if (adminCredentials) {
+      adminCredentials = null;
+      sessionStorage.removeItem("teacherCredentials");
+      updateAdminControls();
+      fetchActivities();
+      showMessage("Logged out of teacher mode.", "info");
+      return;
+    }
+
+    loginForm.dataset.open = "true";
+    loginForm.classList.remove("hidden");
+    document.getElementById("username").focus();
+  });
+
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const username = document.getElementById("username").value;
+    const password = document.getElementById("password").value;
+    const credentials = btoa(`${username}:${password}`);
+
+    try {
+      const response = await fetch("/auth/verify", {
+        headers: { Authorization: `Basic ${credentials}` },
+      });
+
+      if (!response.ok) {
+        showMessage("Invalid teacher username or password.", "error");
+        return;
+      }
+
+      adminCredentials = credentials;
+      sessionStorage.setItem("teacherCredentials", credentials);
+      loginForm.reset();
+      loginForm.dataset.open = "false";
+      updateAdminControls();
+      fetchActivities();
+      showMessage("Teacher mode enabled.", "success");
+    } catch (error) {
+      showMessage("Unable to log in. Please try again.", "error");
+      console.error("Error logging in:", error);
+    }
+  });
+
+  async function verifySavedCredentials() {
+    if (!adminCredentials) {
+      updateAdminControls();
+      return;
+    }
+
+    const response = await fetch("/auth/verify", { headers: authHeaders() });
+    if (!response.ok) {
+      adminCredentials = null;
+      sessionStorage.removeItem("teacherCredentials");
+    }
+    updateAdminControls();
+  }
+
   // Initialize app
+  verifySavedCredentials();
   fetchActivities();
 });
